@@ -1,8 +1,9 @@
 from bitcoinutils.setup import setup
 from bitcoinutils.proxy import NodeProxy
 from bitcoinutils.transactions import Sequence, TxInput, TxOutput, Transaction
-from bitcoinutils.constants import TYPE_RELATIVE_TIMELOCK
+from bitcoinutils.constants import TYPE_ABSOLUTE_TIMELOCK
 from bitcoinutils.keys import PrivateKey
+from bitcoinutils.utils import to_satoshis
 from bitcoinutils.script import Script
 import requests
 from decimal import Decimal
@@ -29,8 +30,8 @@ if __name__ == '__main__':
     # retrieve unspent UTXOs for the P2SH address
     p2sh_addr_unspent = rpc_proxy.listunspent(0, 99999999, [p2sh_addr_key])
 
-    # create relative-block locking sequence for the transaction inputs
-    seq = Sequence(TYPE_RELATIVE_TIMELOCK, 10)
+    # create absolute-block locking sequence for the transaction inputs
+    seq = Sequence(TYPE_ABSOLUTE_TIMELOCK, 10)
 
     # create transaction inputs for unspent UTXOs
     # and calculate the total unspent bitcoins they contain
@@ -50,20 +51,21 @@ if __name__ == '__main__':
 
     # calculate fee to ensure transaction confirmation within half an hour
     satoshis_per_kb = requests \
-        .get('https://bitcoinfees.earn.com/api/v1/fees/recommended') \
-        .json()['halfHourFee']
+        .get('https://api.blockcypher.com/v1/btc/test3') \
+        .json()['medium_fee_per_kb']
     tx_size = len(tx_inputs) * 180 + 34 * 1 + 10 + len(tx_inputs)
-    fee = (tx_size / 1024) * (satoshis_per_kb / 10e+8)
+    fee = (tx_size / 1024) * satoshis_per_kb
 
     # create the transaction output
-    tx_output = TxOutput(int(Decimal(total_unspent) - Decimal(fee) * Decimal(10e+8)),
+    tx_output = TxOutput(to_satoshis(Decimal(total_unspent) - Decimal(fee)),
                          p2pkh_pk.get_address().to_script_pub_key())
     # create the transaction
     tx = Transaction(tx_inputs, [tx_output])
     print('Raw unsigned transaction:', tx.serialize())
 
     # create the redeem script
-    redeem_script = Script([seq.for_script(), 'OP_CHECKLOCKTIMEVERIFY', 'OP_DROP', 'OP_HASH160', p2pkh_pk.to_hash160(),
+    redeem_script = Script([seq.for_script(), 'OP_CHECKLOCKTIMEVERIFY', 'OP_DROP',
+                            'OP_DUP', 'OP_HASH160', p2pkh_pk.to_hash160(),
                             'OP_EQUALVERIFY', 'OP_CHECKSIG'])
     # create the signature for redeeming the funds
     sig = p2pkh_sk.sign_input(tx, 0, redeem_script)

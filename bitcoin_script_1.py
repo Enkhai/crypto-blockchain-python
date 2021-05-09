@@ -1,20 +1,20 @@
 from bitcoinutils.setup import setup
 from bitcoinutils.proxy import NodeProxy
 from bitcoinutils.transactions import Sequence
-from bitcoinutils.constants import TYPE_RELATIVE_TIMELOCK
+from bitcoinutils.constants import TYPE_ABSOLUTE_TIMELOCK
 from bitcoinutils.keys import PrivateKey
 from bitcoinutils.script import Script
 from bitcoinutils.keys import P2shAddress
 from bitcoinrpc.authproxy import JSONRPCException
 
 
-def create_p2sh(proxy, wallet_file, blocks_to_lock, address_name=None):
+def create_p2sh(proxy, wallet_file, block_height, address_name=None):
     """
     Creates a P2SH address with a relative block locktime
 
         :param proxy: JSON RPC proxy for connecting to the network
         :param wallet_file: File containing the wallet
-        :param blocks_to_lock: Number of future blocks the lock is valid for
+        :param block_height: Block height the lock is valid for
         :param address_name: Name of the address locking the funds. If None, a new address will be created
         :return: tuple(address_privk, p2sh_addr): Tuple of private key of the locking address and key of the created P2SH address
     """
@@ -38,7 +38,7 @@ def create_p2sh(proxy, wallet_file, blocks_to_lock, address_name=None):
     p2pkh_pk = p2pkh_sk.get_public_key().get_address()
 
     # create sequence for the redeem script
-    seq = Sequence(TYPE_RELATIVE_TIMELOCK, blocks_to_lock)
+    seq = Sequence(TYPE_ABSOLUTE_TIMELOCK, block_height)
     # create the redeem script
     redeem_script = Script([seq.for_script(), 'OP_CHECKLOCKTIMEVERIFY', 'OP_DROP',
                             'OP_DUP', 'OP_HASH160', p2pkh_pk.to_hash160(),
