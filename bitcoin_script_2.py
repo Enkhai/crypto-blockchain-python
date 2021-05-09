@@ -67,10 +67,11 @@ if __name__ == '__main__':
     redeem_script = Script([seq.for_script(), 'OP_CHECKLOCKTIMEVERIFY', 'OP_DROP',
                             'OP_DUP', 'OP_HASH160', p2pkh_pk.to_hash160(),
                             'OP_EQUALVERIFY', 'OP_CHECKSIG'])
-    # create the signature for redeeming the funds
-    sig = p2pkh_sk.sign_input(tx, 0, redeem_script)
-    # sign every input of the transaction
-    for txin in tx.inputs:
+    # for every input of the transaction
+    for i, txin in enumerate(tx.inputs):
+        # create the signature for redeeming the funds
+        sig = p2pkh_sk.sign_input(tx, i, redeem_script)
+        # and sign the input
         txin.script_sig = Script([sig, p2pkh_pk.to_hex(), redeem_script.to_hex()])
 
     print('Raw signed transaction:', tx.serialize())
