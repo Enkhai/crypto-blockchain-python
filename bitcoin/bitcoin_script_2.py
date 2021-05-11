@@ -1,57 +1,51 @@
-from bitcoinutils.setup import setup
-from bitcoinutils.proxy import NodeProxy
-from bitcoinutils.transactions import Sequence, TxInput, TxOutput, Transaction, Locktime
-from bitcoinutils.constants import TYPE_ABSOLUTE_TIMELOCK
-from bitcoinutils.keys import PrivateKey
-from bitcoinutils.utils import to_satoshis
-from bitcoinutils.script import Script
-import requests
+import sys
 from decimal import Decimal
 
-from bitcoin_script_1 import create_p2sh
+import requests
+from bitcoinrpc.authproxy import JSONRPCException
+from bitcoinutils.constants import TYPE_ABSOLUTE_TIMELOCK
+from bitcoinutils.keys import PrivateKey, PublicKey
+from bitcoinutils.proxy import NodeProxy
+from bitcoinutils.script import Script
+from bitcoinutils.setup import setup
+from bitcoinutils.transactions import Sequence, TxInput, TxOutput, Transaction, Locktime
+from bitcoinutils.utils import to_satoshis
 
-if __name__ == '__main__':
-    # set up the environment for regtest
-    setup('regtest')
-    username, password = "user", "pass"
-    wallet = "/home/will/.bitcoin/regtest/wallets/mywallet"
-    # set up a JSON RPC proxy
-    rpc_proxy = NodeProxy(username, password).get_proxy()
 
-    # set a locking block height
-    lock_block_height = 10
+def spend_p2sh_cltv_p2pkh(proxy, block_height, sender_priv_key, p2sh_addr, rec_addr):
+    """
+    Spends funds from a P2SH address with an absolute locktime to a P2PKH receiver address.
+    :param proxy: JSON RPC proxy for connecting to the network.
+    :param block_height: Block height the lock is valid for.
+    :param sender_priv_key: Private key of the address locking the funds.
+    :param p2sh_addr: P2SH address containing the funds.
+    :param rec_addr: P2PKH address receiving the funds.
+    """
 
-    # retrieve the private key of the original locking P2PKH address and the public key of the created P2SH address
-    priv_key, p2sh_addr = create_p2sh(rpc_proxy, "/home/will/.bitcoin/regtest/wallets/mywallet",
-                                      lock_block_height)
     # mine 100 blocks and send bitcoin to the P2SH address
-    rpc_proxy.generatetoaddress(100, p2sh_addr)
+    proxy.generatetoaddress(100, p2sh_addr)
     # mine 100 blocks to make mined bitcoin spendable, emulates 'bitcoin-cli -generate 100'
     for _ in range(100):
-        rpc_proxy.generatetoaddress(1, rpc_proxy.getnewaddress())
+        proxy.generatetoaddress(1, proxy.getnewaddress())
 
     # retrieve unspent UTXOs for the P2SH address
-    p2sh_addr_unspent = rpc_proxy.listunspent(0, 99999999, [p2sh_addr])
+    p2sh_addr_unspent = proxy.listunspent(0, 99999999, [p2sh_addr])
 
     # create absolute-block locking sequence for the transaction inputs
-    seq = Sequence(TYPE_ABSOLUTE_TIMELOCK, lock_block_height)
+    seq = Sequence(TYPE_ABSOLUTE_TIMELOCK, block_height)
 
     # create transaction inputs for unspent UTXOs
     # and calculate the total unspent bitcoins they contain
     tx_inputs = []
     total_unspent = 0
     for utxo in p2sh_addr_unspent:
-        # we have one transaction output (txout_index 0)
-        tx_inputs.append(TxInput(utxo['txid'], 0, sequence=seq.for_input_sequence()))
+        tx_inputs.append(TxInput(utxo['txid'], utxo['vout'], sequence=seq.for_input_sequence()))
         total_unspent += utxo['amount']
     print("Unspent bitcoin in address {} : {}".format(p2sh_addr, total_unspent))
 
-    # create the address and keys for the funds to be sent to
-    rec_pub_addr = rpc_proxy.getnewaddress()
-    rec_priv_addr = rpc_proxy.dumpprivkey(rec_pub_addr)
-
-    rec_sk = PrivateKey(rec_priv_addr)
-    rec_pk = rec_sk.get_public_key()
+    # get the public key of the receiving address for the funds to be sent to
+    rec_pub_key = proxy.getaddressinfo(rec_addr)['pubkey']
+    rec_pk = PublicKey(rec_pub_key)
 
     # calculate fee
     satoshis_per_kb = requests \
@@ -66,7 +60,7 @@ if __name__ == '__main__':
     tx_output = TxOutput(to_satoshis(Decimal(total_unspent) - Decimal(fee)),
                          rec_pk.get_address().to_script_pub_key())
     # set a lock time in blocks for the transaction
-    lock = Locktime(lock_block_height)
+    lock = Locktime(block_height)
     # create the transaction
     tx = Transaction(tx_inputs, [tx_output], lock.for_transaction())
     unsigned_tx = tx.serialize()
@@ -74,7 +68,7 @@ if __name__ == '__main__':
 
     # we need to rebuild the redeem script from the P2SH private key
     # make the locking P2PKH address private key
-    sender_sk = PrivateKey(priv_key)
+    sender_sk = PrivateKey(sender_priv_key)
     # retrieve the public key of the locking address
     sender_pk = sender_sk.get_public_key()
     # rebuild the redeem script
@@ -94,12 +88,36 @@ if __name__ == '__main__':
     print('Transaction ID:', tx.get_txid())
 
     # verify that the transaction is valid
-    ver = rpc_proxy.testmempoolaccept([signed_tx])
+    ver = proxy.testmempoolaccept([signed_tx])
     if ver[0]['allowed']:
         # if the transaction is valid send the transaction to the blockchain
         print('Transaction is valid.')
-        rpc_proxy.sendrawtransaction(signed_tx)
-        print('{} Bitcoin sent to address {}'.format(Decimal(total_unspent) - Decimal(fee), rec_pub_addr))
+        proxy.sendrawtransaction(signed_tx)
+        print('{} Bitcoin sent to address {}'.format(Decimal(total_unspent) - Decimal(fee), rec_addr))
     else:
         # otherwise, display the reason the transaction failed
         print('Transaction rejected. Reason:', ver[0]['reject-reason'])
+
+
+if __name__ == '__main__':
+    # retrieve the arguments
+    height = int(sys.argv[1])
+    privk = sys.argv[2]
+    p2sh = sys.argv[3]
+    receiver = sys.argv[4]
+
+    # set up the environment for regtest
+    setup('regtest')
+    username, password = "user", "pass"
+    wallet = "/home/will/.bitcoin/regtest/wallets/mywallet"
+    # set up a JSON RPC proxy
+    rpc_proxy = NodeProxy(username, password).get_proxy()
+
+    # load wallet
+    try:
+        rpc_proxy.loadwallet(wallet)
+    except JSONRPCException:
+        # wallet already loaded
+        pass
+
+    spend_p2sh_cltv_p2pkh(rpc_proxy, height, privk, p2sh, receiver)
