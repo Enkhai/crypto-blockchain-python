@@ -109,7 +109,7 @@ if __name__ == '__main__':
     # set up the environment for regtest
     setup('regtest')
     username, password = "user", "pass"
-    wallet = "/home/will/.bitcoin/regtest/wallets/mywallet"
+    wallet = "~/.bitcoin/regtest/wallets/mywallet"
     # set up a JSON RPC proxy
     rpc_proxy = NodeProxy(username, password).get_proxy()
 
